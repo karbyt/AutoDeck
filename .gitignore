@@ -3,3 +3,16 @@
 .vscode/c_cpp_properties.json
 .vscode/launch.json
 .vscode/ipch
+*.user
+*.suo
+*.VC.db
+*.opendb
+.vs/
+x64/
+Debug/
+Release/
+*.obj
+*.pdb
+*.ilk
+*.exe
+*.log
