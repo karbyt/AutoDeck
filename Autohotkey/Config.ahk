@@ -7,6 +7,11 @@ global Config_BaudRate := 115200
 ; For Arduino, it can range from 0 to 1023
 global Slider_Maxvalue := 4095
 
+; ===== MQTT CONFIGURATION (OPTIONAL) =====
+MQTT_BROKER := "mqtt://192.168.1.100:1883"
+MQTT_USER := "user"
+MQTT_PASS := "pw"
+MQTT_CLIENT_ID := "AHK_Client_v2_001"
 
 ; ===== KEYS CONFIGURATION =====
 K1(state) {
@@ -48,8 +53,10 @@ S1(val) {
 }
 
 S2(val) {
-    SetMasterVolume(val)
-    ;ToolTip "Volume Master: " val "%"
+    ; Ubah nilai ke 0-255
+    brightness := Round(val * 255 / 100)
+
+    SendHttpRequest("http://192.168.1.110/win&A=" brightness)
 }
 
 S3(val) {
@@ -76,7 +83,9 @@ R1(direction) {
 }
 
 F7::{
-    SoundPlay "C:\Windows\Media\Windows Notify.wav"
+    
+
+    SendHttpRequest("http://192.168.1.110/win&A=" 10)
 
 }
-; 
+; ;

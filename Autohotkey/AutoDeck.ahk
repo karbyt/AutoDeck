@@ -1,15 +1,19 @@
 #SingleInstance Force
+SetWorkingDir A_ScriptDir "\library" ; IMPORTANT: Otherwise windows can't find the DLLs and it's dependencies
 SendMode "Input"
 A_BatchLines := -1
 
 #Include library\JsRT.ahk
 #Include library\Jxon.ahk
+#Include Config.ahk
 
 
 ; ==================== GLOBAL PATH =============================
 global NIRCMD_PATH := A_ScriptDir "\library\nircmd.exe"
 global AUTODECK_DLL_PATH := A_ScriptDir "\library\AutoDeck.dll"
 global CONFIG_FILE := A_ScriptDir "\Config.ahk"
+global MQTT_PATH := A_ScriptDir "\library\MQTT.dll"
+global MQTT_DLL_NAME := "MQTT.dll" ; Nama DLL saja
 ; =============================================================
 
 
@@ -50,7 +54,7 @@ global windowSpyIcon := A_ScriptDir "\media\WindowSpy.ico"
 ; --- FILE CHECK FUNCTION ---
 _DependencyCheck(filePath, fileName) {
     if !FileExist(filePath) {
-        MsgBox(16, "Dependency Error", "Depencency file is not found: " fileName "`nPath: " filePath "`nMake sure this file is in the correct directory.")
+        MsgBox "Depencency file is not found: " fileName "`nPath: " filePath "`nMake sure this file is in the correct directory.", "Dependency Error"
         ExitApp 
     }
     return true
@@ -82,8 +86,10 @@ _DependencyCheck(suspendIcon, "Suspend.ico")
 _DependencyCheck(windowSpyIcon, "WindowSpy.ico")
 
 ; --- LIBRARY CHECKS ---
-_DependencyCheck(AUTODECK_DLL_PATH, "nircmd.exe")
+_DependencyCheck(AUTODECK_DLL_PATH, "AutoDeck.dll")
 _DependencyCheck(CONFIG_FILE, "Config.ahk")
+_DependencyCheck(MQTT_PATH, "MQTT.dll")
+
 ; --- End File Check ---
 ;=================================================================
 
@@ -378,13 +384,13 @@ SendHttpRequest(url, successCallback := "", errorCallback := "") {
         if (http.Status = 200) {
             response := http.responseText
             ;ShowToast("HTTP Success", "Response: " SubStr(response, 1, 50) "...", successIcon, "107c10", 3000)
-            ShowWinToast("HTTP Success", "Response: " SubStr(response, 1, 50) "...", successIcon)
+            ;ShowWinToast("HTTP Success", "Response: " SubStr(response, 1, 50) "...", successIcon)
             if IsObject(successCallback)
                 successCallback.Call(response)
         } else {
             response := "Status: " http.Status " " http.StatusText
             ;ShowToast("HTTP Failed", response, failedIcon, "e81123", 3000)
-            ShowWinToast("HTTP Failed", response, failedIcon)
+            ;ShowWinToast("HTTP Failed", response, failedIcon)
             if IsObject(errorCallback)
                 errorCallback.Call(response)
         }
@@ -431,6 +437,53 @@ A_TrayMenu.SetIcon("About", aboutIcon)
 A_TrayMenu.Add("Exit", (*) => ExitApp())
 A_TrayMenu.SetIcon("Exit", exitIcon)
 ; =========================================================================
+
+
+
+; ========================== M Q T T WRAPPER FUNCTIONS ============================
+; --- Cek apakah MQTT digunakan ---
+UsingMQTT := (IsSet(MQTT_BROKER) && MQTT_BROKER != "")
+
+; --- Variabel global ---
+hDll := 0
+IsConnected := false
+
+; --- Inisialisasi jika MQTT aktif ---
+if UsingMQTT {
+    hDll := DllCall("LoadLibrary", "Str", MQTT_PATH, "Ptr")
+    if (hDll) {
+        connectResult := DllCall(MQTT_DLL_NAME "\mqtt_connect", "AStr", MQTT_BROKER, "AStr", MQTT_CLIENT_ID, "AStr", MQTT_USER, "AStr", MQTT_PASS, "CDecl Int")
+        IsConnected := (connectResult = 0)
+
+        if (!IsConnected) {
+            MsgBox "Gagal terhubung ke MQTT broker:`n" . MQTT_BROKER . "`nKode error: " . connectResult, "MQTT Connection Failed"
+        }
+    } else {
+        MsgBox "Gagal memuat DLL: " . MQTT_PATH, "DLL Load Failed"
+        ExitApp
+    }
+}
+
+; --- Fungsi Publish MQTT ---
+publishMQTT(topic, msg, qos := 0, retained := 0) {
+    global IsConnected
+    if (!IsConnected)
+        return false
+    result := DllCall("MQTT.dll\mqtt_publish", "AStr", topic, "AStr", msg, "Int", qos, "Int", retained, "CDecl Int")
+    return (result = 0)
+}
+
+; --- Bersihkan saat keluar ---
+OnExit(*) {
+    global IsConnected, hDll
+    if (IsConnected)
+        DllCall("MQTT.dll\mqtt_disconnect", "CDecl Int")
+    if (hDll)
+        DllCall("FreeLibrary", "Ptr", hDll)
+}
+
+
+; =================================================================================
 
 
 
@@ -496,8 +549,13 @@ GetMasterMute(deviceType := "playback") {
 
 
 
+
+
+
+
+
 ; ======================== READ AND PARSE SERIAL MESSAGE ==========================
-#Include Config.ahk
+
 #Include library\ClassSerial.ahk 
 
 global cs ; Class Serial Object
@@ -698,7 +756,7 @@ F9::{
 }
 
 F8::{
-    SetMasterMute(!GetMasterMute("playback")) ; Toggle mute master volume
+    publishMQTT("ngisormejo", "T")
 }
 
 F10::{
