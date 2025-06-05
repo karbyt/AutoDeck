@@ -9,9 +9,26 @@ global Slider_Maxvalue := 4095
 
 ; ===== MQTT CONFIGURATION (OPTIONAL) =====
 MQTT_BROKER := "mqtt://192.168.1.100:1883"
-MQTT_USER := "user"
-MQTT_PASS := "pw"
-MQTT_CLIENT_ID := "AHK_Client_v2_001"
+MQTT_USER := ""
+MQTT_PASS := ""
+
+; ===== MQTT SUBSCRIPTION LIST (OPTIONAL) =====
+MQTT_SUBSCRIPTIONS := [
+    { Topic: "ngisormejo/command", Callback: YourCallback1 },
+    { Topic: "sensor/data", Callback: YourCallback2 }
+]
+
+; ===== MQTT FALLBACK FUNCTION (IF USING SUBSCIPTION) =====
+YourCallback1(topic, payload) {
+    Run "notepad.exe"
+    Sleep 2000
+    SendInput "Pesan Diterima:`nTopik: " . topic . "`nPayload: " . payload
+    MsgBox "Pesan Diterima:`nTopik: " . topic . "`nPayload: " . payload
+}
+
+YourCallback2(topic, payload) {
+    OutputDebug("Callback dari sensor/data:`n" . payload)
+}
 
 ; ===== KEYS CONFIGURATION =====
 K1(state) {
@@ -56,7 +73,7 @@ S2(val) {
     ; Ubah nilai ke 0-255
     brightness := Round(val * 255 / 100)
 
-    SendHttpRequest("http://192.168.1.110/win&A=" brightness)
+    publishMQTT("ngisormejo", String(brightness))
 }
 
 S3(val) {

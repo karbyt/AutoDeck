@@ -444,19 +444,34 @@ A_TrayMenu.SetIcon("Exit", exitIcon)
 ; --- Cek apakah MQTT digunakan ---
 UsingMQTT := (IsSet(MQTT_BROKER) && MQTT_BROKER != "")
 
+; --- Default Fallback values ---
+if !IsSet(MQTT_BROKER)
+    MQTT_BROKER := ""
+if !IsSet(MQTT_CLIENT_ID)
+    MQTT_CLIENT_ID := "AutoDeck_PC"
+if !IsSet(MQTT_USER)
+    MQTT_USER := ""
+if !IsSet(MQTT_PASS)
+    MQTT_PASS := ""
+
 ; --- Variabel global ---
-hDll := 0
-IsConnected := false
+global hDll := 0
+global IsConnected := false
+global MqttSubscriptionCallbacks := Map()
 
 ; --- Inisialisasi jika MQTT aktif ---
 if UsingMQTT {
-    hDll := DllCall("LoadLibrary", "Str", MQTT_PATH, "Ptr")
+    hDll := DllCall("LoadLibrary", "Str", MQTT_DLL_NAME, "Ptr")
     if (hDll) {
-        connectResult := DllCall(MQTT_DLL_NAME "\mqtt_connect", "AStr", MQTT_BROKER, "AStr", MQTT_CLIENT_ID, "AStr", MQTT_USER, "AStr", MQTT_PASS, "CDecl Int")
+        connectResult := DllCall( MQTT_DLL_NAME "\mqtt_connect", "AStr", MQTT_BROKER, "AStr", MQTT_CLIENT_ID, "AStr", MQTT_USER, "AStr", MQTT_PASS, "CDecl Int")
         IsConnected := (connectResult = 0)
 
-        if (!IsConnected) {
-            MsgBox "Gagal terhubung ke MQTT broker:`n" . MQTT_BROKER . "`nKode error: " . connectResult, "MQTT Connection Failed"
+        if (IsConnected) {
+            CapsToast(autodeckpngIcon, "MQTT connected", "0e0030", 2000)
+            ;SetTimer ProcessMqttMessages, 250 ; Cek pesan setiap 250 ms
+        } else {
+
+            MsgBox "Gagal terhubung ke MQTT broker:`n" . MQTT_BROKER . "`nKode error: " . connectResult "`nMake sure you entered the right username and password", "MQTT Connection Failed"
         }
     } else {
         MsgBox "Gagal memuat DLL: " . MQTT_PATH, "DLL Load Failed"
@@ -466,22 +481,135 @@ if UsingMQTT {
 
 ; --- Fungsi Publish MQTT ---
 publishMQTT(topic, msg, qos := 0, retained := 0) {
-    global IsConnected
-    if (!IsConnected)
+    global IsConnected, hDll, MQTT_PATH
+    if (!IsConnected || !hDll){
+        ToolTip "publish failed"
         return false
-    result := DllCall("MQTT.dll\mqtt_publish", "AStr", topic, "AStr", msg, "Int", qos, "Int", retained, "CDecl Int")
+    }
+    result := DllCall("MQTT_dll.dll\mqtt_publish", "AStr", topic, "AStr", msg, "Int", qos, "Int", retained, "CDecl Int")
     return (result = 0)
 }
 
-; --- Bersihkan saat keluar ---
-OnExit(*) {
-    global IsConnected, hDll
-    if (IsConnected)
-        DllCall("MQTT.dll\mqtt_disconnect", "CDecl Int")
-    if (hDll)
-        DllCall("FreeLibrary", "Ptr", hDll)
+; --- Fungsi Subscribe MQTT ---
+subscribeMQTT(topicFilter, CallbackFunction, qos := 0) {
+    global IsConnected, hDll, MQTT_PATH, MqttSubscriptionCallbacks
+    if (!IsConnected || !hDll) {
+        ; ToolTip ("Gagal subscribe, blm terhubung")
+        return false
+
+    }
+    if !IsObject(CallbackFunction) {
+            MsgBox "Error: CallbackFunction untuk subscribeMQTT ke '" . topicFilter . "' tidak valid.", "Subscribe Error"
+        return false
+    }
+
+    try {
+        result := DllCall(MQTT_PATH . "\mqtt_subscribe", "AStr", topicFilter, "Int", qos, "CDecl Int")
+
+        if (result = 0) {
+            ; Simpan callback untuk topik ini (atau filter topik).
+            ; Jika topik filter mengandung wildcard, pencocokan yang lebih canggih mungkin diperlukan di ProcessMqttMessages.
+            ; Untuk saat ini, kita simpan berdasarkan filter persis.
+            MqttSubscriptionCallbacks[topicFilter] := CallbackFunction
+            OutputDebug("AHK: Berhasil subscribe ke '" . topicFilter . "'. Callback terdaftar.")
+            return true
+        } else {
+            MsgBox "gagal subscribe"
+            return false
+        }
+    } catch as e {
+        OutputDebug("AHK: EXCEPTION saat subscribeMQTT ke '" . topicFilter . "': " . e.Message)
+        return false
+    }
 }
 
+
+; --- Timer untuk Memproses Pesan Masuk dari Antrian DLL ---
+ProcessMqttMessages() {
+    global hDll, MQTT_PATH, MQTT_DLL_NAME, MqttSubscriptionCallbacks
+    if (!hDll || !IsConnected) ; Jangan proses jika DLL tidak dimuat atau tidak terkoneksi
+        return
+
+    local msgCount, getMsgResult
+    local topicBuf, payloadBuf
+    local receivedTopic, receivedPayload
+
+    try {
+        msgCount := DllCall(MQTT_PATH . "\mqtt_get_queued_message_count", "CDecl Int")
+    } catch as e_count {
+        SetTimer(ProcessMqttMessages, 0) ; Matikan timer jika ada error fundamental
+        MsgBox "Error kritis saat mengambil jumlah pesan MQTT. Timer dihentikan.", "MQTT Error"
+        return
+    }
+
+    Loop msgCount { ; Proses semua pesan yang ada di antrian saat ini
+        ; Siapkan buffer untuk setiap pesan. Ukuran ini mungkin perlu disesuaikan.
+        topicBuf := Buffer(512, 0)    ; Buffer 512 byte untuk topik
+        payloadBuf := Buffer(4096, 0) ; Buffer 4KB untuk payload
+
+        try {
+            getMsgResult := DllCall(MQTT_PATH . "\mqtt_get_queued_message",
+                                    "Ptr", topicBuf, "Int", topicBuf.Size,
+                                    "Ptr", payloadBuf, "Int", payloadBuf.Size,
+                                    "CDecl Int")
+        } catch as e_get {
+            break ; Hentikan loop jika ada error saat mengambil pesan
+        }
+
+        if (getMsgResult == 1) { ; Pesan berhasil diambil
+            receivedTopic := StrGet(topicBuf, "UTF-8")
+            receivedPayload := StrGet(payloadBuf, "UTF-8")
+
+            ; Panggil callback yang sesuai berdasarkan topik
+            ; Ini adalah pencocokan sederhana. Untuk wildcard MQTT (+, #), Anda perlu logika yang lebih canggih.
+            foundCallback := false
+            for subscribedFilter, callbackFunc in MqttSubscriptionCallbacks {
+                ; Pencocokan sederhana: apakah topik yang diterima sama dengan filter yang disubscribe?
+                ; ATAU, apakah filter adalah wildcard '#' yang cocok dengan semua?
+                ; ATAU, apakah filter memiliki '+' dan cocok dengan struktur topik? (ini lebih kompleks)
+                
+                ; Pencocokan paling dasar:
+                if (receivedTopic == subscribedFilter) {
+                    if (callbackFunc is Func)
+                        callbackFunc.Call(receivedTopic, receivedPayload)
+                    foundCallback := true
+                    break  ; Asumsi satu callback per pesan
+                }
+                ; TODO: Implementasi pencocokan wildcard yang lebih baik jika diperlukan.
+                ; Contoh sangat dasar untuk wildcard '#' di akhir filter
+                else if (SubStr(subscribedFilter, -1) == "/#" && InStr(receivedTopic, SubStr(subscribedFilter, 1, StrLen(subscribedFilter) - 2)) == 1) {
+                    if (callbackFunc is Func)
+                        callbackFunc.Call(receivedTopic, receivedPayload)
+                    foundCallback := true
+                    break
+                }
+            }
+            if (!foundCallback) {
+                OutputDebug("AHK: Tidak ada callback AHK yang terdaftar untuk topik: '" . receivedTopic . "'")
+            }
+
+        } else if (getMsgResult == 0) {
+            OutputDebug("AHK: mqtt_get_queued_message mengembalikan 0 (antrian kosong), padahal msgCount > 0. Aneh.")
+            break ; Keluar loop
+        } else if (getMsgResult == -2) {
+            OutputDebug("AHK: Error dari DLL: Buffer topik terlalu kecil saat mengambil pesan.")
+            ; Anda bisa coba lagi dengan buffer lebih besar, atau log error
+            break
+        } else if (getMsgResult == -3) {
+            OutputDebug("AHK: Error dari DLL: Buffer payload terlalu kecil saat mengambil pesan.")
+            break
+        } else {
+            OutputDebug("AHK: Error tidak dikenal (" . getMsgResult . ") saat mengambil pesan dari DLL.")
+            break
+        }
+    }
+}
+
+
+
+for sub in MQTT_SUBSCRIPTIONS {
+    subscribeMQTT(sub.Topic, sub.Callback)
+}
 
 ; =================================================================================
 
@@ -651,9 +779,11 @@ MyFunc(MsgFromSerial) {
 
 
 }
-;====================================================================
+; ====================================================================
 
 
+
+; ========================= CONFIG SEND (UNTESTED) ===================
 SendConfigToESP32() {
     global cs
 
@@ -708,41 +838,9 @@ SendConfigToESP32() {
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 ; ===================== BEGIN THE COMMUNICATION =====================
 SetupSerialCommunication()
 ;====================================================================
-
-
 
 
 
@@ -764,3 +862,61 @@ F10::{
 }
 ;=========================================================
 
+; --- Bersihkan saat keluar ---
+OnExit(ExitReason, ExitCode) {
+    global cs
+    global IsConnected, hDll, MQTT_DLL_NAME
+
+    OutputDebug("AHK: OnExit START. Reason: " . ExitReason . ", Code: " . ExitCode)
+
+    ; 1. SEGERA lepaskan port serial. Ini harus cepat.
+    if IsObject(cs) {
+        OutputDebug("AHK: OnExit - Melepaskan objek Serial (cs)...")
+        try {
+            cs := unset
+            OutputDebug("AHK: OnExit - Objek Serial (cs) di-unset.")
+        } catch as e {
+            OutputDebug("AHK: OnExit - EXCEPTION saat unset cs: " . e.Message)
+        }
+    }
+
+    ; 2. Coba disconnect MQTT dan FreeLibrary HANYA JIKA EXIT BUKAN KARENA INTERUPSI CEPAT
+    ;    dan jika DLL dimuat.
+    ;    Ini adalah kompromi. Jika ExitReason adalah Menu, Reload, atau Single,
+    ;    operasi MQTT mungkin akan terpotong oleh AHK.
+    if (hDll) {
+        if (ExitReason != "Menu" && ExitReason != "Reload" && ExitReason != "Single") {
+            OutputDebug("AHK: OnExit - Exit reason memungkinkan cleanup MQTT penuh.")
+            if (IsConnected) {
+                OutputDebug("AHK: OnExit - Mencoba disconnect MQTT...")
+                try {
+                    DllCall(MQTT_DLL_NAME . "\mqtt_disconnect", "CDecl Int")
+                    IsConnected := false
+                    OutputDebug("AHK: OnExit - Panggilan mqtt_disconnect selesai.")
+                } catch as e {
+                    OutputDebug("AHK: OnExit - EXCEPTION saat disconnect MQTT: " . e.Message)
+                }
+            }
+            OutputDebug("AHK: OnExit - Mencoba FreeLibrary MQTT DLL...")
+            try {
+                DllCall("FreeLibrary", "Ptr", hDll)
+                OutputDebug("AHK: OnExit - MQTT DLL dibebaskan.")
+            } catch as e {
+                OutputDebug("AHK: OnExit - EXCEPTION saat FreeLibrary MQTT DLL: " . e.Message)
+            }
+            hDll := 0
+        } else {
+            OutputDebug("AHK: OnExit - Exit reason (" . ExitReason . ") mungkin menginterupsi cleanup MQTT. Melewati disconnect/freelibrary penuh.")
+            ; // Pertimbangkan apakah FreeLibrary harus dicoba di sini meskipun berisiko terpotong.
+            ; // Jika FreeLibrary itu sendiri yang menyebabkan hang, mungkin lebih baik dilewati.
+            ; // Jika tidak, memanggilnya mungkin lebih baik daripada tidak sama sekali.
+            ; // Untuk sekarang, kita lewati untuk memaksimalkan kecepatan exit pada kasus ini.
+            ; // Anda bisa bereksperimen dengan menambahkan FreeLibrary di sini jika diperlukan.
+            ; // try DllCall("FreeLibrary", "Ptr", hDll) catch {}
+            ; // hDll := 0
+        }
+    }
+
+    OutputDebug("AHK: OnExit END.")
+    ; Jangan return 1 kecuali Anda ingin *mencegah* exit (yang tidak kita inginkan di sini).
+}
