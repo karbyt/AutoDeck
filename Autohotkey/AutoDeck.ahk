@@ -1,11 +1,14 @@
-#SingleInstance Force
+#Requires AutoHotkey v2.0
+Persistent
 SetWorkingDir A_ScriptDir "\library" ; IMPORTANT: Otherwise windows can't find the DLLs and it's dependencies
 SendMode "Input"
 A_BatchLines := -1
 
+#Include library\ClassSerial.ahk
 #Include library\JsRT.ahk
 #Include library\Jxon.ahk
 #Include Config.ahk
+
 
 
 ; ==================== GLOBAL PATH =============================
@@ -15,6 +18,7 @@ global CONFIG_FILE := A_ScriptDir "\Config.ahk"
 global MQTT_PATH := A_ScriptDir "\library\MQTT.dll"
 global MQTT_DLL_NAME := "MQTT.dll" ; Nama DLL saja
 ; =============================================================
+
 
 
 
@@ -33,6 +37,9 @@ global speakerIcon := A_ScriptDir "\media\Speaker.png"
 global autodeckpngIcon := A_ScriptDir "\media\AutoDeck.png"
 global autodeckpngIconSuspended := A_ScriptDir "\media\AutoDeckSuspended.png"
 global autodeckpngIconPaused := A_ScriptDir "\media\AutoDeckPaused.png"
+global layerIcon := A_ScriptDir "\media\Layer.png"
+global mqttIcon := A_ScriptDir "\media\MQTT.png"
+global spellcheckIcon := A_ScriptDir "\media\SpellCheck.png"
 
 
 ; --- ICO ICON ---
@@ -47,6 +54,8 @@ global reloadIcon := A_ScriptDir "\media\Reload.ico"
 global suspendIcon := A_ScriptDir "\media\Suspend.ico"
 global windowSpyIcon := A_ScriptDir "\media\WindowSpy.ico"
 ; =============================================================
+
+
 
 
 
@@ -75,6 +84,9 @@ _DependencyCheck(speakerIcon, "Speaker.png")
 _DependencyCheck(autodeckpngIcon, "AutoDeck.png")
 _DependencyCheck(autodeckpngIconSuspended, "AutoDeckSuspended.png")
 _DependencyCheck(autodeckpngIconPaused, "AutoDeckPaused.png")
+_DependencyCheck(layerIcon, "Layer.png")
+_DependencyCheck(mqttIcon, "MQTT.png")
+_DependencyCheck(spellcheckIcon, "SpellCheck.png")
 _DependencyCheck(autodeckicoIcon, "AutoDeck.ico")
 _DependencyCheck(aboutIcon, "About.ico")
 _DependencyCheck(bugIcon, "Bug.ico")
@@ -95,7 +107,30 @@ _DependencyCheck(MQTT_PATH, "MQTT.dll")
 
 
 
+
+
+; ======================= RUN ON STARTUP =========================
+RegKey := "HKCU\Software\Microsoft\Windows\CurrentVersion\Run"
+ValueName := "AutoDeck"
+ExePath := A_ScriptFullPath
+
+try {
+    existingValue := RegRead(RegKey, ValueName)
+} catch {
+    existingValue := ""
+}
+
+if (existingValue != ExePath) {
+    RegWrite(ExePath, "REG_SZ", RegKey, ValueName)
+}
+; ================================================================
+
+
+
+
 ; ================ AUTO RELOAD WHEN CONFIG CHANGES ================
+;                      IT DOESN'T WORK. FUCK IT
+
 lastModified := FileGetTime(CONFIG_FILE, "M")
 
 SetTimer(CheckConfigUpdate, 1000)
@@ -104,7 +139,9 @@ CheckConfigUpdate(*) {
     static lastModified := FileGetTime(CONFIG_FILE, "M")
     currentModified := FileGetTime(CONFIG_FILE, "M")
     if currentModified != lastModified {
-        Reload
+        sendSerial(CONFIG_JSON)
+        ;Sleep 1000
+        ;Reload
     }
 }
 ; =================================================================
@@ -120,6 +157,7 @@ PinWindow(targetWindow := "A") {
     WinSetAlwaysOnTop(-1, "ahk_id " tWnd)
 }
 ; ==================================================================
+
 
 
 
@@ -165,6 +203,8 @@ ExplorerNewWindow(path) {
     Send("{Space}")
 }
 ; ==================================================================
+
+
 
 
 
@@ -259,6 +299,8 @@ ShowToast(title, message, iconPath, color, duration) {
 
 
 
+
+
 ; =========================== WINDOWS TOAST ===============================
 toast_app_exe := A_ScriptFullPath
 startMenuShortcut := A_StartMenuCommon "\AutoDeck.lnk"
@@ -268,7 +310,7 @@ if !FileExist(startMenuShortcut) {
 }
 
 ShowWinToast(title, message, imgpath) {
-    static js := (JsRT.Edge)()
+     js := (JsRT.Edge)()
     static toast_appid := A_ScriptFullPath
 
     js.ProjectWinRTNamespace("Windows.UI.Notifications")
@@ -305,56 +347,74 @@ ShowWinToast(title, message, imgpath) {
 
 
 
-;=============================== MINI TOAST ===============================
-global activeToastGui := 0  ; Menyimpan objek GUI, bukan hanya hwnd
 
-CapsToast(iconPath, tittle, color, duration) {
-    global activeToastGui
-    if (activeToastGui != 0) {
-        try {
-            activeToastGui.Destroy()  
-            activeToastGui := 0
-        } catch {
-            ; if error, do nothing
+; =============================== MINI TOAST ===============================
+global activeToasts := []   
+global TOAST_GUI_HEIGHT := 45    
+global TOAST_VERTICAL_SPACING := 35 
+global TOAST_BASE_Y_OFFSET := 130  
+
+showMiniToast(iconPath, title, color, duration) {
+    global activeToasts, TOAST_GUI_HEIGHT
+    toastGui := Gui("+AlwaysOnTop -Caption +ToolWindow +Disabled", "miniToast_" . A_TickCount)
+    toastGui.Add("Picture", "x10 y8 w25 h25", iconPath)
+    toastGui.SetFont("s12 w700 q5", "Consolas") 
+    toastGui.Add("Text", "cFFFFFF x40 y10", title)
+    toastGui.BackColor := color
+    calculatedWidth := Round(100 + (StrLen(title) * 15)) 
+    toastInfo := {gui: toastGui, width: calculatedWidth, height_gui: TOAST_GUI_HEIGHT}
+    activeToasts.Push(toastInfo) 
+    _repositionAllActiveToasts()
+    destroyFunc := _destroySpecificToastAndReposition.Bind(toastGui)
+    SetTimer(destroyFunc, -duration)
+}
+
+_destroySpecificToastAndReposition(guiObjToDestroy) {
+    global activeToasts
+    local toastRemoved := false
+    try {
+        if (IsObject(guiObjToDestroy) && guiObjToDestroy.Hwnd) { 
+            guiObjToDestroy.Destroy()
+        }
+    } catch Error {
+    }
+    Loop activeToasts.Length {
+        idx := activeToasts.Length - A_Index + 1
+        if (activeToasts[idx].gui == guiObjToDestroy) {
+            activeToasts.RemoveAt(idx)
+            toastRemoved := true
+            break 
         }
     }
-    ; Create a new GUI for the toast
-    capsToast := Gui("+AlwaysOnTop -Caption +ToolWindow +Disabled", "capsToast")
-    capsToast.Add("Picture", "x10 y8 w25 h25", iconPath)
-    capsToast.SetFont("s12 w700 q5", "Segoe UI")
-    capsToast.Add("Text", "cFFFFFF x40 y10", tittle)
-    capsToast.BackColor := color
+    if (toastRemoved || !IsObject(guiObjToDestroy) || !guiObjToDestroy.Hwnd) { 
+        _repositionAllActiveToasts() 
+    }
+}
 
-    Width := 120
-    Height := 45
+_repositionAllActiveToasts() {
+    global activeToasts, TOAST_GUI_HEIGHT, TOAST_VERTICAL_SPACING, TOAST_BASE_Y_OFFSET
     MonitorWidth := A_ScreenWidth
     MonitorHeight := A_ScreenHeight
-    X := (MonitorWidth - Width) // 2  
-    Y := MonitorHeight - Height - 130  
-    activeToastGui := capsToast
-    
-    capsToast.Show("NoActivate w" Width " h" Height " x" X " y" Y)
-
-    WinSetTransparent 250, "ahk_id " capsToast.Hwnd
-    WinSetRegion "0-0 w200 h75 r30-30", "ahk_id " capsToast.Hwnd
-    WinSetExStyle("+0x20", capsToast)  ; Klik-through
-    DestroyThisToast := _DestroySpecificToast.Bind(capsToast)
-    SetTimer DestroyThisToast, -duration
-}
-
-_DestroySpecificToast(guiObj) {
-    global activeCapsLockToastGui
-    try {
-        guiObj.Destroy()
-        if (activeCapsLockToastGui == guiObj) {
-            activeCapsLockToastGui := 0
+    if (!activeToasts.Length) {
+        return 
+    }
+    y_position_for_bottom_most_toast := MonitorHeight - TOAST_BASE_Y_OFFSET - TOAST_GUI_HEIGHT
+    For index, toastEntry in activeToasts {
+        toastGuiObj := toastEntry.gui
+        currentToastWidth := toastEntry.width
+        currentToastGuiHeight := toastEntry.height_gui 
+        if (!IsObject(toastGuiObj) || !toastGuiObj.Hwnd) {
+            Continue 
         }
-    } catch {
-
+        currentX := (MonitorWidth - currentToastWidth) // 2  
+        display_Y := y_position_for_bottom_most_toast - ( (index - 1) * (currentToastGuiHeight + TOAST_VERTICAL_SPACING) )
+        toastGuiObj.Show("NoActivate x" currentX " y" display_Y " w" currentToastWidth " h" currentToastGuiHeight)
+        WinSetTransparent(255, "ahk_id " toastGuiObj.Hwnd)
+        WinSetRegion("0-0 w" currentToastWidth " h" (currentToastGuiHeight + 30) " r30-30", "ahk_id " toastGuiObj.Hwnd)
+        WinSetExStyle("+0x20", toastGuiObj)  ; Klik-through
     }
 }
-; ==========================================================================
-
+; ================================================================================================
 
 
 ; ========================== CALL CAPSLOCK TOAST ==========================
@@ -362,16 +422,17 @@ _DestroySpecificToast(guiObj) {
     global capsIconOn, capsIconOff
     ToggleState := GetKeyState("CapsLock", "T")
     if (ToggleState)
-        CapsToast(capsIconOn, "Caps ON", "0e0030", 2000)
+        showMiniToast(capsIconOn, "Caps ON", "0e0030", 2000)
     else
-        CapsToast(capsIconOff, "Caps OFF", "0e0030", 2000) ; Warna bisa dibedakan jika mau
+        showMiniToast(capsIconOff, "Caps OFF", "0e0030", 2000) ; Warna bisa dibedakan jika mau
 }
 ; =========================================================================
 
 
 
+
 ; ======================== HTTP REQUEST FUNCTION ==========================
-SendHttpRequest(url, successCallback := "", errorCallback := "") {
+sendHttpRequest(url, successCallback := "", errorCallback := "") {
     global successIcon, failedIcon ; Pastikan ikon tersedia
     try {
         http := ComObject("WinHttp.WinHttpRequest.5.1")
@@ -403,6 +464,7 @@ SendHttpRequest(url, successCallback := "", errorCallback := "") {
     }
 }
 ; ==========================================================================
+
 
 
 
@@ -440,9 +502,58 @@ A_TrayMenu.SetIcon("Exit", exitIcon)
 
 
 
+
+
+
+
+
+; ; === Konfigurasi ===
+; MQTT_PATH      := A_ScriptDir "\library\MQTT.dll"
+; MQTT_BROKER    := "mqtt://192.168.1.100:1883"
+; MQTT_CLIENT_ID := "AHK_Client_001"
+; MQTT_USER      := "sandemo"
+; MQTT_PASS      := "sandemo787898"
+
+; Config_ComPort  := "COM6"  ; Ganti sesuai port yang kamu pakai
+; Config_BaudRate := 115200
+; Slider_MaxValue := 4095    ; ADC maksimum untuk mapping slider
+
+; ; ===== MQTT SUBSCRIPTION LIST (OPTIONAL) =====
+; MQTT_SUBSCRIPTIONS := [
+;     { Topic: "ngisormejo/command", Callback: YourCallback1 },
+;     { Topic: "sensor/data", Callback: YourCallback2 }
+; ]
+
+; ; ===== MQTT FALLBACK FUNCTION (IF USING SUBSCIPTION) =====
+; YourCallback1(topic, payload) {
+;     Run "notepad.exe"
+;     Sleep 2000
+;     SendInput "Pesan Diterima:`nTopik: " . topic . "`nPayload: " . payload
+;     MsgBox "Pesan Diterima:`nTopik: " . topic . "`nPayload: " . payload
+; }
+
+; YourCallback2(topic, payload) {
+;     OutputDebug("Callback dari sensor/data:`n" . payload)
+; }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 ; ========================== M Q T T WRAPPER FUNCTIONS ============================
 ; --- Cek apakah MQTT digunakan ---
 UsingMQTT := (IsSet(MQTT_BROKER) && MQTT_BROKER != "")
+
 
 ; --- Default Fallback values ---
 if !IsSet(MQTT_BROKER)
@@ -454,10 +565,14 @@ if !IsSet(MQTT_USER)
 if !IsSet(MQTT_PASS)
     MQTT_PASS := ""
 
+
 ; --- Variabel global ---
 global hDll := 0
 global IsConnected := false
 global MqttSubscriptionCallbacks := Map()
+
+
+
 
 ; --- Inisialisasi jika MQTT aktif ---
 if UsingMQTT {
@@ -467,8 +582,9 @@ if UsingMQTT {
         IsConnected := (connectResult = 0)
 
         if (IsConnected) {
-            CapsToast(autodeckpngIcon, "MQTT connected", "0e0030", 2000)
-            ;SetTimer ProcessMqttMessages, 250 ; Cek pesan setiap 250 ms
+            showMiniToast(mqttIcon, "MQTT Connected", "0e0030", 2000)
+            ; showMiniToast(autodeckpngIcon, "MQTT connected", "0e0030", 2000)
+            SetTimer ProcessMqttMessages, 250 ; Cek pesan setiap 250 ms
         } else {
 
             MsgBox "Gagal terhubung ke MQTT broker:`n" . MQTT_BROKER . "`nKode error: " . connectResult "`nMake sure you entered the right username and password", "MQTT Connection Failed"
@@ -479,16 +595,21 @@ if UsingMQTT {
     }
 }
 
+
+
+
 ; --- Fungsi Publish MQTT ---
 publishMQTT(topic, msg, qos := 0, retained := 0) {
     global IsConnected, hDll, MQTT_PATH
     if (!IsConnected || !hDll){
-        ToolTip "publish failed"
+        showMiniToast(reloadIcon, "Publish Failed", "0e0030", 2000)
+        ;ToolTip "publish failed"
         return false
     }
-    result := DllCall("MQTT_dll.dll\mqtt_publish", "AStr", topic, "AStr", msg, "Int", qos, "Int", retained, "CDecl Int")
+    result := DllCall("MQTT.dll\mqtt_publish", "AStr", topic, "AStr", msg, "Int", qos, "Int", retained, "CDecl Int")
     return (result = 0)
 }
+
 
 ; --- Fungsi Subscribe MQTT ---
 subscribeMQTT(topicFilter, CallbackFunction, qos := 0) {
@@ -606,12 +727,14 @@ ProcessMqttMessages() {
 }
 
 
-
-for sub in MQTT_SUBSCRIPTIONS {
-    subscribeMQTT(sub.Topic, sub.Callback)
+if (UsingMQTT && IsSet(MQTT_SUBSCRIPTIONS)) {
+    for sub in MQTT_SUBSCRIPTIONS {
+        subscribeMQTT(sub.Topic, sub.Callback)
+    }
 }
 
-; =================================================================================
+; =====================================================================
+
 
 
 
@@ -641,7 +764,7 @@ SetAppMute(exeName, bMute) { ; bMute: 1 (true) untuk mute, 0 (false) untuk unmut
     global AUTODECK_DLL_PATH
     DllCall(AUTODECK_DLL_PATH "\SetAppMute", "Int", bMute, "WStr", exeName)
     ShowToast("App Mute", exeName . (bMute ? " Muted" : " Unmuted"), successIcon, bMute ? "e81123" : "107c10", 1500)
-    CapsToast(bMute ? speakerOffIcon : speakerOnIcon, "Mic " (bMute ? "Muted" : "Unmuted"), "0e0030", 2000) ; Ganti ikon sesuai kebutuhan
+    showMiniToast(bMute ? speakerOffIcon : speakerOnIcon, "Mic " (bMute ? "Muted" : "Unmuted"), "0e0030", 2000) ; Ganti ikon sesuai kebutuhan
 }
 
 GetAppMute(exeName) {
@@ -666,7 +789,7 @@ SetMasterMute(bMute, deviceType := "playback") { ; bMute: 1 (true) untuk mute, 0
     DllCall(AUTODECK_DLL_PATH "\SetMasterMute", "Int", bMute, "WStr", deviceType)
     isMuted := GetMasterMute(deviceType) ; Verifikasi
     ; ShowToast("Master Mute", deviceType . (isMuted ? " Muted" : " Unmuted"), successIcon, isMuted ? "e81123" : "107c10", 1500)
-    CapsToast(isMuted ? speakerOffIcon : speakerOnIcon, (isMuted ? "Muted" : "Unmuted"), "0e0030", 2000) 
+    showMiniToast(isMuted ? speakerOffIcon : speakerOnIcon, (isMuted ? "Muted" : "Unmuted"), "0e0030", 2000) 
 }
 
 GetMasterMute(deviceType := "playback") {
@@ -681,12 +804,7 @@ GetMasterMute(deviceType := "playback") {
 
 
 
-
-; ======================== READ AND PARSE SERIAL MESSAGE ==========================
-
-#Include library\ClassSerial.ahk 
-
-global cs ; Class Serial Object
+global cs  ; Class Serial Object
 
 GetGlobalVar(name) {
     return %name%
@@ -696,26 +814,34 @@ MapValue(val, in_min, in_max, out_min, out_max) {
     return Round((val - in_min) * (out_max - out_min) / (in_max - in_min) + out_min)
 }
 
+
+
+; === Inisialisasi Serial ===
 SetupSerialCommunication() {
-    global cs
+    global cs, Config_ComPort, Config_BaudRate
+
     cs := Serial(Config_ComPort, Config_BaudRate)
-    
+
     if (!cs.Event_Parse_Start(MyFunc, "`n", 10)) {
-        MsgBox "Can't connect`nI have no idea why", "Error", "iconX"
+        ShowWinToast("Serial Error", "Can't open serial on " Config_ComPort "`nClose other app that use this COM Port", cableIcon)
+        ;MsgBox "Tidak dapat membuka serial di " Config_ComPort
         ExitApp
     }
-    ShowWinToast("Serial Connected", "Device on " Config_ComPort " `nis connected.", cableIcon)
+    showMiniToast(cableIcon, "Serial Connected on " Config_ComPort, "0e0030", 2000)
+    ;ToolTip "Serial Connected"
+    ;MsgBox "Serial Connected on " Config_ComPort
 }
 
+; === Parsing Serial ===
 MyFunc(MsgFromSerial) {
-    CleanMsg := Trim(MsgFromSerial, "rn")
+    CleanMsg := Trim(MsgFromSerial, Chr(13) . Chr(10))
     ; ToolTip "Raw Msg: " CleanMsg
     
-    ; --- PARSING BUTTON --- format: K{id}:{P/R}
-    if RegExMatch(CleanMsg, "^K(\d+):([PR])$", &m) {
-        keyID := m[1]
+    ; --- PARSING BUTTON --- format: B{id}:{P/R}
+    if RegExMatch(CleanMsg, "^B(\d+):([PR])$", &m) {
+        buttonID := m[1]
         state := m[2]
-        fnName := "K" keyID
+        fnName := "B" buttonID
         fn := GetGlobalVar(fnName)
     
         if IsObject(fn) && Type(fn) = "Func" {
@@ -730,15 +856,15 @@ MyFunc(MsgFromSerial) {
         return
     }
     
-    ; --- PARSING SLIDER ANALOG --- format: S{id}:{value}
-    if RegExMatch(CleanMsg, "^S(\d+):(\d+)$", &s) {
-        sliderID := s[1]
+    ; --- PARSING POTS ANALOG --- format: P{id}:{value}
+    if RegExMatch(CleanMsg, "^P(\d+):(\d+)$", &s) {
+        potID := s[1]
         rawValue := s[2]
     
         maxADC := GetGlobalVar("Slider_MaxValue")
         mapped := MapValue(rawValue, 0, maxADC, 0, 100)
     
-        fnName := "S" sliderID
+        fnName := "P" potID
         fn := GetGlobalVar(fnName)
     
         if IsObject(fn) && Type(fn) = "Func" {
@@ -772,151 +898,100 @@ MyFunc(MsgFromSerial) {
     }
 
     ; --- ECHO SERIAL MESSAGE ---
-    if RegExMatch(CleanMsg, "^ACK:\s*(.*)", &m) {
-        received := m[1]  ; Ini bagian setelah "ACK: "
-        MsgBox "ESP32 echoing: " received
-    }
+    ; static isAckStarted := false
+    ; static ackData := ""
 
-
+    ; if RegExMatch(CleanMsg, "^ACK:\s*(.*)", &m) {
+    ;     isAckStarted := true
+    ;     ackData := m[1] "`n"  ; Mulai kumpulkan
+    ; }
+    ; else if isAckStarted {
+    ;     if (CleanMsg ~= "^-+$") {  ; End of line check "-----"
+    ;         MsgBox "ESP32 full ACK:\n" ackData
+    ;         ackData := ""
+    ;         isAckStarted := false
+    ;     } else {
+    ;         ackData .= CleanMsg "`n"
+    ;     }
+    ; }
 }
-; ====================================================================
 
 
-
-; ========================= CONFIG SEND (UNTESTED) ===================
-SendConfigToESP32() {
+; ========================= SEND SERIAL ===================
+sendSerial(message) {
     global cs
 
     if (!IsObject(cs) || !cs._Is_Actually_Connected) {
-        MsgBox "Serial port tidak terkoneksi!", "Error Pengiriman Konfigurasi"
+        MsgBox "Serial port tidak terkoneksi!", "Error Pengiriman"
         return
     }
 
-    ; Contoh input JSON rapi (multiline)
-    prettyJson := '
-(
-{
-    "version": 1,
-    "pins": {
-        "button1": 12,
-        "button2": 14,
-        "led_status": 2,
-        "slider1_adc": 34
-    },
-    "settings": {
-        "baud_rate": 115200,
-        "device_name": "MyMacropadV2"
-    }
-}
-)'
-    MsgBox (prettyJson)
+    cleaned := RegExReplace(message, "\s", "")
 
+    cleaned .= "`n"
 
-    ; Convert JSON rapi ke Map
-    jsonStr := Trim(prettyJson) ; Hilangkan newline/spasi di awal/akhir
-    MsgBox (jsonStr)
-    map := Jxon_Load(&jsonStr)
-
-    ; Dump jadi satu baris tanpa indentasi atau newline
-    jsonToSend := Jxon_Dump(map, false)
-    MsgBox "JSON yang akan dikirim: " jsonToSend, "Info Konfigurasi"
-    ; Kirim string JSON ke ESP32, tambahkan newline sebagai terminator
-    ; Jika WriteString Anda mengharapkan parameter encoding, sesuaikan.
-    ; Di AHK v2, string secara default adalah UTF-8, jadi jika WriteString
-    ; hanya mengirim byte dari string, itu seharusnya sudah benar.
     try {
-        bytesSent := cs.WriteString(jsonToSend . "`n") ; Tambahkan newline
+        bytesSent := cs.WriteString(cleaned)
         if (bytesSent > 0) {
-            MsgBox "Konfigurasi dikirim: " . bytesSent . " bytes.`n" . jsonToSend, "Info Konfigurasi"
+            OutputDebug "Pesan dikirim: " bytesSent "`n"
+            ;MsgBox "Pesan dikirim: " . bytesSent . " bytes.`n" . cleaned, "Info Pengiriman"
         } else {
-            MsgBox "Gagal mengirim konfigurasi. Tidak ada byte terkirim atau port disconnect.", "Error Pengiriman Konfigurasi"
+            MsgBox "Gagal mengirim pesan. Tidak ada byte terkirim atau port disconnect.", "Error Pengiriman"
         }
     } catch Error as e {
-        MsgBox "Error saat mengirim konfigurasi: " . e.Message, "Exception Pengiriman"
+        MsgBox "Error saat mengirim pesan: " . e.Message, "Exception Pengiriman"
     }
 }
 
+; ===============================================================================
 
 
-; ===================== BEGIN THE COMMUNICATION =====================
+
+; === Serial Communication Setup ===
 SetupSerialCommunication()
-;====================================================================
 
+OnExit(Cleanup)
+return
 
+; === Cleanup saat keluar ===
+Cleanup(*) {
+    global cs, hDll, MQTT_PATH
 
-; ==================== DEBUGGING AND TESTING AREA ====================
+    totalStart := A_TickCount
 
-; F1::ShowToast("Test Toast", "Ini adalah pesan tes.", successIcon, "107c10", 3000)
-; F2::Nircmd_MonitorOff()
-F9::{
-    SetMasterVolume(20)
+    ; === Disconnect MQTT ===
+    startMQTT := A_TickCount
+    mqttDC := DllCall(MQTT_PATH . "\mqtt_disconnect", "CDecl Int")
+    elapsedMQTT := A_TickCount - startMQTT
 
+    ; === Putuskan Serial ===
+    startSerial := A_TickCount
+    try cs := unset
+    catch as ex
+        MsgBox "Gagal unset cs: " ex.Message
+    elapsedSerial := A_TickCount - startSerial
+
+    ; === Unload DLL ===
+    if hDll
+        DllCall("FreeLibrary", "Ptr", hDll)
+
+    ; === Ringkasan waktu ===
+    totalElapsed := A_TickCount - totalStart
+    ;MsgBox "MQTT Disconnect: " elapsedMQTT " ms"
+        ;. "`nSerial Unset: " elapsedSerial " ms"
+        ;. "`nTotal Cleanup: " totalElapsed " ms"
 }
 
-F8::{
-    publishMQTT("ngisormejo", "T")
-}
 
-F10::{
-    SendConfigToESP32()
-}
-;=========================================================
 
-; --- Bersihkan saat keluar ---
-OnExit(ExitReason, ExitCode) {
-    global cs
-    global IsConnected, hDll, MQTT_DLL_NAME
 
-    OutputDebug("AHK: OnExit START. Reason: " . ExitReason . ", Code: " . ExitCode)
 
-    ; 1. SEGERA lepaskan port serial. Ini harus cepat.
-    if IsObject(cs) {
-        OutputDebug("AHK: OnExit - Melepaskan objek Serial (cs)...")
-        try {
-            cs := unset
-            OutputDebug("AHK: OnExit - Objek Serial (cs) di-unset.")
-        } catch as e {
-            OutputDebug("AHK: OnExit - EXCEPTION saat unset cs: " . e.Message)
-        }
-    }
 
-    ; 2. Coba disconnect MQTT dan FreeLibrary HANYA JIKA EXIT BUKAN KARENA INTERUPSI CEPAT
-    ;    dan jika DLL dimuat.
-    ;    Ini adalah kompromi. Jika ExitReason adalah Menu, Reload, atau Single,
-    ;    operasi MQTT mungkin akan terpotong oleh AHK.
-    if (hDll) {
-        if (ExitReason != "Menu" && ExitReason != "Reload" && ExitReason != "Single") {
-            OutputDebug("AHK: OnExit - Exit reason memungkinkan cleanup MQTT penuh.")
-            if (IsConnected) {
-                OutputDebug("AHK: OnExit - Mencoba disconnect MQTT...")
-                try {
-                    DllCall(MQTT_DLL_NAME . "\mqtt_disconnect", "CDecl Int")
-                    IsConnected := false
-                    OutputDebug("AHK: OnExit - Panggilan mqtt_disconnect selesai.")
-                } catch as e {
-                    OutputDebug("AHK: OnExit - EXCEPTION saat disconnect MQTT: " . e.Message)
-                }
-            }
-            OutputDebug("AHK: OnExit - Mencoba FreeLibrary MQTT DLL...")
-            try {
-                DllCall("FreeLibrary", "Ptr", hDll)
-                OutputDebug("AHK: OnExit - MQTT DLL dibebaskan.")
-            } catch as e {
-                OutputDebug("AHK: OnExit - EXCEPTION saat FreeLibrary MQTT DLL: " . e.Message)
-            }
-            hDll := 0
-        } else {
-            OutputDebug("AHK: OnExit - Exit reason (" . ExitReason . ") mungkin menginterupsi cleanup MQTT. Melewati disconnect/freelibrary penuh.")
-            ; // Pertimbangkan apakah FreeLibrary harus dicoba di sini meskipun berisiko terpotong.
-            ; // Jika FreeLibrary itu sendiri yang menyebabkan hang, mungkin lebih baik dilewati.
-            ; // Jika tidak, memanggilnya mungkin lebih baik daripada tidak sama sekali.
-            ; // Untuk sekarang, kita lewati untuk memaksimalkan kecepatan exit pada kasus ini.
-            ; // Anda bisa bereksperimen dengan menambahkan FreeLibrary di sini jika diperlukan.
-            ; // try DllCall("FreeLibrary", "Ptr", hDll) catch {}
-            ; // hDll := 0
-        }
-    }
 
-    OutputDebug("AHK: OnExit END.")
-    ; Jangan return 1 kecuali Anda ingin *mencegah* exit (yang tidak kita inginkan di sini).
-}
+
+
+
+F8::ShowWinToast("test","pesansederhana",cableIcon)
+; S2(val){
+;     SetMasterVolume(val)
+; }

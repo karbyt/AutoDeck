@@ -103,8 +103,8 @@ class Serial
         
         SCS_Result := DllCall("SetCommState", "UPtr", this._COM_FileHandle, "Ptr", DCB.Ptr)
         if (SCS_Result = 0) {
-            MsgBox "There is a problem with Serial Port communication.`nFailed Dll SetCommState.`nClose other program that uses this COM port`nThe Script Will Now Exit.", "Error", 16 ; 16 = IconError
-            ;ShowWinToast("Serial Error", "There is a problem with Serial Port communication.`nClose other program that uses " this._COM_Port "`nThe Script Will Now Exit.", cableIcon) ; Gunakan ShowWinToast untuk notifikasi
+            ;MsgBox "There is a problem with Serial Port communication.`nFailed Dll SetCommState.`nClose other program that uses this COM port`nThe Script Will Now Exit.", "Error", 16 ; 16 = IconError
+            ShowWinToast("Serial Error", "There is a problem with Serial Port communication.`nClose other program that uses " this._COM_Port "`nThe Script Will Now Exit.", cableIcon) ; Gunakan ShowWinToast untuk notifikasi
             this.__Close_COM()
             return 0
         }
@@ -219,10 +219,8 @@ class Serial
                     this.__Close_COM()
                     if (!this._Was_Disconnected_Notified) {
                         try 
-                            showMiniToast(cableIcon, "Serial Disconnected", "0e0030", 2000)
-                            ;MsgBox("Serial Disconnected", "Write failed. Port " this._COM_Port " disconnected.")
                             ;Util_ShowToast("Serial Disconnected", "Write failed. Port " this._COM_Port " disconnected.", cableIcon, "C50C00", 3000)
-                            ;ShowWinToast("Serial Disconnected", "Write failed. Port " this._COM_Port " disconnected.", cableIcon)
+                            ShowWinToast("Serial Disconnected", "Write failed. Port " this._COM_Port " disconnected.", cableIcon)
                         catch {
 
                         }
@@ -243,10 +241,8 @@ class Serial
             this.__Close_COM()
              if (!this._Was_Disconnected_Notified) {
                 try 
-                    showMiniToast(cableIcon, "Serial Disconnected", "0e0030", 2000)
-                    ;MsgBox("Serial Disconnected", "Write exception. Port " this._COM_Port " lost.")
                     ;Util_ShowToast("Serial Disconnected", "Write exception. Port " this._COM_Port " lost.", cableIcon, "C50C00", 3000)
-                    ;ShowWinToast("Serial Disconnected", "Write exception. Port " this._COM_Port " lost.", cableIcon)
+                    ShowWinToast("Serial Disconnected", "Write exception. Port " this._COM_Port " lost.", cableIcon)
                 catch {
 
                 }
@@ -408,10 +404,8 @@ class Serial
                 this._Is_Actually_Connected := true
                 this._Was_Disconnected_Notified := false ; Reset flag notifikasi
                 try 
-                    showMiniToast(cableIcon, "Serial Connected on " this._COM_Port, "0e0030", 2000)
-                    ;MsgBox ("Serial Connected", "Device on " this._COM_Port " `nis connected.")
                     ;Util_ShowToast("Serial Connected", "Device on " this._COM_Port " `nis connected.", cableIcon, "0078D4", 3000)
-                    ;ShowWinToast("Serial Connected", "Device on " this._COM_Port " `nis connected.", cableIcon)
+                    ShowWinToast("Serial Connected", "Device on " this._COM_Port " `nis connected.", cableIcon)
                 catch
                     MsgBox "Serial Connected: Device on " this._COM_Port " reconnected. (Toast N/A)", "Connection Status"
                 
@@ -422,10 +416,8 @@ class Serial
                 this._Is_Actually_Connected := false 
                 if (!this._Was_Disconnected_Notified) {
                     try 
-                        showMiniToast(cableIcon, "Serial Disconnected", "0e0030", 2000)
-                        ;MsgBox "Serial Disconnected", "Device on " this._COM_Port " lost.`nReconnecting..."
                         ;Util_ShowToast("Serial Disconnected", "Device on " this._COM_Port " lost.`nReconnecting...", cableIcon, "C50C00", 3000)
-                       ;ShowWinToast("Serial Disconnected", "Device on " this._COM_Port " lost.`nReconnecting...", cableIcon)
+                        ShowWinToast("Serial Disconnected", "Device on " this._COM_Port " lost.`nReconnecting...", cableIcon)
                     catch
                         MsgBox "Serial Disconnected: Device on " this._COM_Port " lost. Retrying... (Toast N/A)", "Connection Status"
                     this._Was_Disconnected_Notified := true
@@ -445,9 +437,8 @@ class Serial
             this.__Close_COM()
             if (!this._Was_Disconnected_Notified) {
                  try 
-                    MsgBox "Serial Read Error", "Error: " e.Message ". Disconnecting."
                     ;Util_ShowToast("Serial Read Error", "Error: " e.Message ". Disconnecting.", cableIcon, "C50C00", 3000)
-                    ;ShowWinToast("Serial Read Error", "Error: " e.Message ". Disconnecting.", cableIcon)
+                    ShowWinToast("Serial Read Error", "Error: " e.Message ". Disconnecting.", cableIcon)
                  catch
                     MsgBox "Serial Read Error: " e.Message ". Disconnecting. (Toast N/A)", "Connection Error"
                  this._Was_Disconnected_Notified := true
@@ -462,10 +453,8 @@ class Serial
             this.__Close_COM() 
             if (!this._Was_Disconnected_Notified) {
                 try 
-                    showMiniToast(cableIcon, "Serial Disconnected", "0e0030", 2000)
-                    ;MsgBox "Serial Disconnected", "Device on " this._COM_Port
                     ;Util_ShowToast("Serial Disconnected", "Device on " this._COM_Port " lost.`nReconnecting...", cableIcon, "C50C00", 3000)
-                    ;ShowWinToast("Serial Disconnected", "Device on " this._COM_Port " lost.`nCheck your cable and try to reconnect", cableIcon)
+                    ShowWinToast("Serial Disconnected", "Device on " this._COM_Port " lost.`nCheck your cable and try to reconnect", cableIcon)
                 catch
                      MsgBox "Serial Disconnected: Device on " this._COM_Port " disconnected. Retrying... (Toast N/A)", "Connection Status"
                 this._Was_Disconnected_Notified := true
@@ -492,9 +481,7 @@ class Serial
                     if IsObject(this._Event_Registered_Function)
                         try this._Event_Registered_Function.Call(CurrentPart)
                         catch as e
-                           ;MsgBox "Error in Event Callback Function: " e.Message, "Callback Error", 16
-                        ;ShowWinToast("Callback Error", "You haven't configured this action in Config.ahk",cableIcon)
-                        showMiniToast(spellcheckIcon,"You haven't configured this action in Config.ahk", "0e0030", 3000)
+                           MsgBox "Error in Event Callback Function: " e.Message, "Callback Error", 16
                 }
                 ProcessedChars += StrLen(CurrentPart) + StrLen(this._Event_Delims)
             }
